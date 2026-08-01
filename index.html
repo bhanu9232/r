@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QR File Receiver</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
 <style>
   :root {
     --bg: #0d1117;
@@ -75,6 +74,14 @@
     margin-bottom: 8px;
   }
   .row span.val { color: var(--text); font-weight: 600; }
+  .percent-display {
+    text-align: center;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 4px 0 10px;
+    font-variant-numeric: tabular-nums;
+  }
   .progress-bar {
     width: 100%; height: 8px;
     background: #30363d;
@@ -119,12 +126,13 @@
   <video id="video" playsinline autoplay muted></video>
   <div class="scan-frame"></div>
 </div>
-<canvas id="canvas"></canvas>
 
 <div class="panel" id="infoPanel">
   <div class="row"><span>File</span><span class="val" id="fName">—</span></div>
-  <div class="row"><span>Chunks received</span><span class="val" id="chunkStatus">0 / 0</span></div>
+  <div class="percent-display" id="percentDisplay">0%</div>
   <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="row" style="margin-top:12px"><span>Chunks received</span><span class="val" id="chunkStatus">0 / 0</span></div>
+  <div class="row"><span>Data received</span><span class="val" id="dataReceived">0 KB / 0 KB</span></div>
 </div>
 
 <a id="downloadBtn" class="download-btn" download>⬇ File Download Karo</a>
@@ -135,11 +143,11 @@
 const startBtn = document.getElementById('startBtn');
 const videoWrap = document.getElementById('video-wrap');
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const infoPanel = document.getElementById('infoPanel');
 const fName = document.getElementById('fName');
 const chunkStatus = document.getElementById('chunkStatus');
+const percentDisplay = document.getElementById('percentDisplay');
+const dataReceived = document.getElementById('dataReceived');
 const progressFill = document.getElementById('progressFill');
 const downloadBtn = document.getElementById('downloadBtn');
 const statusMsg = document.getElementById('statusMsg');
@@ -148,9 +156,15 @@ let meta = null; // {id, totalChunks, name, mime}
 let chunks = new Map(); // index -> base64 string
 let scanning = false;
 let rafId = null;
+let detector = null;
 
 startBtn.onclick = async () => {
+  if (!('BarcodeDetector' in window)) {
+    statusMsg.textContent = '⚠️ Ye browser QR scanning support nahi karta. Android par latest Chrome / Edge use karo.';
+    return;
+  }
   try {
+    detector = new BarcodeDetector({ formats: ['qr_code'] });
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'environment' }
     });
@@ -160,8 +174,6 @@ startBtn.onclick = async () => {
     scanning = true;
     statusMsg.textContent = 'QR code ko frame ke andar rakho...';
     video.onloadedmetadata = () => {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
       tick();
     };
   } catch (err) {
@@ -169,16 +181,16 @@ startBtn.onclick = async () => {
   }
 };
 
-function tick() {
+async function tick() {
   if (!scanning) return;
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-      inversionAttempts: 'dontInvert'
-    });
-    if (code && code.data) {
-      handleFrame(code.data);
+    try {
+      const codes = await detector.detect(video);
+      if (codes.length > 0 && codes[0].rawValue) {
+        handleFrame(codes[0].rawValue);
+      }
+    } catch (e) {
+      // detection hiccup on a frame — ignore and keep scanning
     }
   }
   rafId = requestAnimationFrame(tick);
@@ -187,13 +199,15 @@ function tick() {
 function handleFrame(data) {
   const parts = data.split('|');
   if (parts[0] === 'M') {
-    const [, id, totalChunks, name, mime] = parts;
+    const [, id, totalChunks, name, mime, size] = parts;
     if (!meta || meta.id !== id) {
-      meta = { id, totalChunks: parseInt(totalChunks, 10), name: decodeURIComponent(name), mime };
+      meta = { id, totalChunks: parseInt(totalChunks, 10), name: decodeURIComponent(name), mime, size: size ? parseInt(size, 10) : null };
       chunks = new Map();
       infoPanel.style.display = 'block';
       fName.textContent = meta.name;
       updateProgress();
+    } else if (meta.size == null && size) {
+      meta.size = parseInt(size, 10);
     }
   } else if (parts[0] === 'D') {
     const [, id, idxStr, totalStr, chunkData] = parts;
@@ -218,8 +232,23 @@ function handleFrame(data) {
 
 function updateProgress() {
   if (!meta) return;
+  const pct = meta.totalChunks ? (chunks.size / meta.totalChunks) * 100 : 0;
   chunkStatus.textContent = `${chunks.size} / ${meta.totalChunks}`;
-  progressFill.style.width = `${(chunks.size / meta.totalChunks) * 100}%`;
+  percentDisplay.textContent = `${Math.round(pct)}%`;
+  progressFill.style.width = `${pct}%`;
+
+  // received data size: sum of base64 chars actually collected, converted to approx raw bytes
+  let receivedBase64Chars = 0;
+  chunks.forEach(c => receivedBase64Chars += c.length);
+  const receivedBytes = Math.floor(receivedBase64Chars * 3 / 4);
+  const totalLabel = meta.size != null ? formatBytes(meta.size) : '—';
+  dataReceived.textContent = `${formatBytes(receivedBytes)} / ${totalLabel}`;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }
 
 function finishTransfer() {
