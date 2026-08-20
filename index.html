@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QR File Receiver</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.2/qrcode.min.js"></script>
 <style>
   :root {
     --bg: #0d1117;
@@ -101,6 +102,35 @@
     margin-top: 10px;
     word-break: break-all;
   }
+  .chunk-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 8px;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chunk-btn {
+    width: 34px;
+    height: 28px;
+    font-size: 0.62rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: #21262d;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .chunk-btn.received {
+    background: var(--accent-dim);
+    color: white;
+    border-color: var(--accent);
+  }
   .download-btn {
     display: none;
     margin-top: 16px;
@@ -133,6 +163,9 @@
   <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
   <div class="row" style="margin-top:12px"><span>Chunks received</span><span class="val" id="chunkStatus">0 / 0</span></div>
   <div class="row"><span>Data received</span><span class="val" id="dataReceived">0 KB / 0 KB</span></div>
+
+  <div class="row" style="margin-top:14px"><span>Received chunks (sender pe wahi number green karo)</span></div>
+  <div id="chunkGrid" class="chunk-grid" style="margin-top:8px;"></div>
 </div>
 
 <a id="downloadBtn" class="download-btn" download>⬇ File Download Karo</a>
@@ -144,6 +177,7 @@ const startBtn = document.getElementById('startBtn');
 const videoWrap = document.getElementById('video-wrap');
 const video = document.getElementById('video');
 const infoPanel = document.getElementById('infoPanel');
+const chunkGrid = document.getElementById('chunkGrid');
 const fName = document.getElementById('fName');
 const chunkStatus = document.getElementById('chunkStatus');
 const percentDisplay = document.getElementById('percentDisplay');
@@ -154,9 +188,71 @@ const statusMsg = document.getElementById('statusMsg');
 
 let meta = null; // {id, totalChunks, name, mime}
 let chunks = new Map(); // index -> base64 string
+let pendingCombos = []; // repair frames waiting for one side to become known
 let scanning = false;
 let rafId = null;
 let detector = null;
+
+function padBytes(str, len) {
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < str.length; i++) arr[i] = str.charCodeAt(i);
+  return arr;
+}
+function xorBytesArr(a, b) {
+  const out = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i] ^ b[i];
+  return out;
+}
+function bytesToStr(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
+}
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+function storeChunk(idx, str) {
+  if (chunks.has(idx)) return;
+  chunks.set(idx, str);
+  markChunkGreen(idx);
+  updateProgress();
+  sweepPending();
+}
+
+// try to resolve a repair (XOR) frame: if we already know one of the two
+// chunks it combines, algebraically recover the other one instantly —
+// no need to wait for that exact original frame to loop back around.
+function tryResolveCombo(c) {
+  const haveA = chunks.has(c.idxA);
+  const haveB = chunks.has(c.idxB);
+  if (haveA && haveB) return true; // nothing left to learn from this one
+  if (!haveA && !haveB) return false; // keep waiting
+  const knownIdx = haveA ? c.idxA : c.idxB;
+  const unknownIdx = haveA ? c.idxB : c.idxA;
+  const unknownLen = haveA ? c.lenB : c.lenA;
+  const knownPadded = padBytes(chunks.get(knownIdx), c.padLen);
+  const recoveredPadded = xorBytesArr(c.xorBytes, knownPadded);
+  const recoveredStr = bytesToStr(recoveredPadded.slice(0, unknownLen));
+  storeChunk(unknownIdx, recoveredStr);
+  return true;
+}
+
+function sweepPending() {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = pendingCombos.length - 1; i >= 0; i--) {
+      if (tryResolveCombo(pendingCombos[i])) {
+        pendingCombos.splice(i, 1);
+        changed = true;
+      }
+    }
+  }
+}
 
 startBtn.onclick = async () => {
   if (!('BarcodeDetector' in window)) {
@@ -186,8 +282,8 @@ async function tick() {
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
     try {
       const codes = await detector.detect(video);
-      if (codes.length > 0 && codes[0].rawValue) {
-        handleFrame(codes[0].rawValue);
+      for (const code of codes) {
+        if (code && code.rawValue) handleFrame(code.rawValue);
       }
     } catch (e) {
       // detection hiccup on a frame — ignore and keep scanning
@@ -203,8 +299,10 @@ function handleFrame(data) {
     if (!meta || meta.id !== id) {
       meta = { id, totalChunks: parseInt(totalChunks, 10), name: decodeURIComponent(name), mime, size: size ? parseInt(size, 10) : null };
       chunks = new Map();
+      pendingCombos = [];
       infoPanel.style.display = 'block';
       fName.textContent = meta.name;
+      renderChunkGrid();
       updateProgress();
     } else if (meta.size == null && size) {
       meta.size = parseInt(size, 10);
@@ -216,12 +314,27 @@ function handleFrame(data) {
       meta = { id, totalChunks: parseInt(totalStr, 10), name: 'received_file', mime: 'application/octet-stream' };
       infoPanel.style.display = 'block';
       fName.textContent = meta.name;
+      renderChunkGrid();
     }
     if (meta.id !== id) return; // frame from a different transfer, ignore
-    const idx = parseInt(idxStr, 10);
-    if (!chunks.has(idx)) {
-      chunks.set(idx, chunkData);
-      updateProgress();
+    storeChunk(parseInt(idxStr, 10), chunkData);
+  } else if (parts[0] === 'X') {
+    const [, id, totalStr, idxAStr, idxBStr, lenAStr, lenBStr, padLenStr, b64xor] = parts;
+    if (!meta) {
+      meta = { id, totalChunks: parseInt(totalStr, 10), name: 'received_file', mime: 'application/octet-stream' };
+      infoPanel.style.display = 'block';
+      fName.textContent = meta.name;
+      renderChunkGrid();
+    }
+    if (meta.id !== id) return;
+    const combo = {
+      idxA: parseInt(idxAStr, 10), idxB: parseInt(idxBStr, 10),
+      lenA: parseInt(lenAStr, 10), lenB: parseInt(lenBStr, 10),
+      padLen: parseInt(padLenStr, 10), xorBytes: base64ToBytes(b64xor)
+    };
+    if (!tryResolveCombo(combo)) {
+      pendingCombos.push(combo);
+      if (pendingCombos.length > 80) pendingCombos.shift();
     }
   }
 
@@ -243,6 +356,20 @@ function updateProgress() {
   const receivedBytes = Math.floor(receivedBase64Chars * 3 / 4);
   const totalLabel = meta.size != null ? formatBytes(meta.size) : '—';
   dataReceived.textContent = `${formatBytes(receivedBytes)} / ${totalLabel}`;
+}
+
+function renderChunkGrid() {
+  if (!meta) return;
+  let html = '';
+  for (let i = 0; i < meta.totalChunks; i++) {
+    html += `<button class="chunk-btn" data-idx="${i}">${i}</button>`;
+  }
+  chunkGrid.innerHTML = html;
+}
+
+function markChunkGreen(idx) {
+  const btn = chunkGrid.querySelector(`[data-idx="${idx}"]`);
+  if (btn) btn.classList.add('received');
 }
 
 function formatBytes(bytes) {
@@ -281,4 +408,4 @@ function finishTransfer() {
 </script>
 
 </body>
-</html>
+  </html>
