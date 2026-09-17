@@ -303,10 +303,11 @@ function syncDecode(code, totalChunks) {
   return { mode, isComplete, count, indices: idx.slice(0, count) };
 }
 
-// Builds the code the JOIN side shows: picks whichever set (received vs
-// missing) is smaller, sends it whole if it fits, else a rotating window.
-function generateSyncCode(total, chunksMap, rotationState) {
-  if (!total) return "";
+// Pure: computes the code for a GIVEN offset without mutating anything.
+// Also returns how big the full candidate list is and how many slots (M)
+// fit per code, so the caller can decide the next offset itself.
+function computeSyncWindow(total, chunksMap, offset) {
+  if (!total) return { code: '', fullListLength: 0, M: 0 };
   const receivedCount = chunksMap.size;
   const missingCount = total - receivedCount;
   const useMissing = missingCount <= receivedCount;
@@ -323,11 +324,18 @@ function generateSyncCode(total, chunksMap, rotationState) {
     isComplete = 0;
     chosen = [];
     if (M > 0) {
-      for (let k = 0; k < M; k++) chosen.push(fullList[(rotationState.offset + k) % fullList.length]);
-      rotationState.offset = (rotationState.offset + M) % fullList.length;
+      const off = ((offset % fullList.length) + fullList.length) % fullList.length;
+      for (let k = 0; k < M; k++) chosen.push(fullList[(off + k) % fullList.length]);
     }
   }
-  return syncEncode(total, useMissing ? 1 : 0, isComplete, chosen);
+  const code = syncEncode(total, useMissing ? 1 : 0, isComplete, chosen);
+  return { code, fullListLength: fullList.length, M };
+}
+
+// Convenience: code for the CURRENT window, no state change. Safe to call
+// as often as needed (e.g. every time a new chunk arrives).
+function generateSyncCode(total, chunksMap, rotationState) {
+  return computeSyncWindow(total, chunksMap, rotationState.offset).code;
 }
 
 // Applies a code the HOST side received: merges new info into excludedIndices
@@ -519,7 +527,11 @@ const JoinApp = {
   },
   generateNextSyncCode() {
     if (!this.meta) return;
-    this.refreshSyncCode(); // generateSyncCode() advances the rotation window internally
+    const win = computeSyncWindow(this.meta.total, this.chunks, this.syncRotation.offset);
+    if (win.M > 0 && win.fullListLength > 0) {
+      this.syncRotation.offset = (this.syncRotation.offset + win.M) % win.fullListLength;
+    }
+    this.refreshSyncCode();
     const btn = document.getElementById('genSyncBtn');
     btn.textContent = '✓';
     setTimeout(() => { btn.textContent = '🔄'; }, 400);
