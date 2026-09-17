@@ -67,7 +67,8 @@
   .chunk-btn.received { background: var(--accent-dim); color: white; border-color: var(--accent); }
   
   .sync-box { display: flex; gap: 8px; margin-top: 8px; }
-  .sync-input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: #0d1117; color: var(--text); font-family: monospace; }
+  .sync-input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: #0d1117; color: var(--text); font-family: monospace; font-size: 1.05rem; letter-spacing: 0.12em; text-transform: uppercase; }
+  #syncOutput { color: var(--accent); font-weight: 700; text-align: center; }
   
   .status { font-size: 0.8rem; color: var(--muted); text-align: center; margin-top: 10px; }
   .hidden { display: none !important; }
@@ -164,6 +165,7 @@
       <div class="row" style="margin-top:16px;"><span>Offline Sync Key (Give to Host)</span></div>
       <div class="sync-box">
         <input type="text" id="syncOutput" class="sync-input" readonly>
+        <button class="action-btn secondary-btn" id="genSyncBtn" title="Generate a new/next code">🔄</button>
         <button class="action-btn" id="copySyncBtn">Copy</button>
       </div>
 
@@ -228,33 +230,122 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }
 
-function generateSyncCode(total, chunksMap) {
-  if (!total) return "";
-  const bytes = new Uint8Array(Math.ceil(total / 8));
-  for (let i = 0; i < total; i++) {
-    if (chunksMap.has(i)) bytes[Math.floor(i / 8)] |= (1 << (i % 8));
+/* =========================================================================
+   SYNC CODE — always exactly 8 characters, regardless of file size.
+   A raw bitmap can't fit in 8 chars once a file has more than ~30 chunks,
+   so instead of listing every chunk, the code carries a compact
+   "mixed-radix" packed number: 1 bit for which set it's describing
+   (received vs missing — whichever is smaller), 1 bit for whether the
+   list is the FULL set or just a sample, a small count, and up to M
+   chunk indices — where M is computed from the file's chunk count so the
+   packed number always fits in the alphabet's 8-character capacity.
+   For files where M can't hold every remaining index in one code, the
+   window of indices shown rotates over time (every 10s) so repeated
+   codes eventually cover the whole file — this matters most near the
+   end of a transfer, when few chunks are actually missing and the full
+   set usually DOES fit in one code.
+   ========================================================================= */
+const SYNC_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTUVWXYZ-_*+#@"; // no O/I/L to avoid look-alikes with 0/1
+const SYNC_BASE = SYNC_ALPHABET.length;
+const SYNC_CODE_LEN = 8;
+const SYNC_CODE_LIMIT = Math.pow(SYNC_BASE, SYNC_CODE_LEN);
+
+function syncToBaseN(value) {
+  let out = '';
+  let v = value;
+  if (v === 0) return SYNC_ALPHABET[0].repeat(SYNC_CODE_LEN);
+  while (v > 0) {
+    out = SYNC_ALPHABET[v % SYNC_BASE] + out;
+    v = Math.floor(v / SYNC_BASE);
   }
-  let len = bytes.length;
-  while (len > 0 && bytes[len - 1] === 0) len--;
-  if (len === 0) return "";
-  let b64 = btoa(String.fromCharCode.apply(null, bytes.slice(0, len)));
-  return b64.replace(/=/g, '');
+  return out.padStart(SYNC_CODE_LEN, SYNC_ALPHABET[0]);
+}
+function syncFromBaseN(str) {
+  let v = 0;
+  for (const ch of str.toUpperCase()) {
+    const digit = SYNC_ALPHABET.indexOf(ch);
+    if (digit === -1) return null;
+    v = v * SYNC_BASE + digit;
+  }
+  return v;
+}
+function syncMaxSlotsFor(totalChunks) {
+  let M = 0;
+  while (4 * (M + 2) * Math.pow(totalChunks, M + 1) <= SYNC_CODE_LIMIT) M++;
+  return M;
+}
+function syncEncode(totalChunks, mode, isComplete, chosenIndices) {
+  const M = syncMaxSlotsFor(totalChunks);
+  const count = Math.min(chosenIndices.length, M);
+  let value = mode;
+  value = value * 2 + isComplete;
+  value = value * (M + 1) + count;
+  for (let i = 0; i < M; i++) {
+    const idx = i < count ? chosenIndices[i] : 0;
+    value = value * totalChunks + idx;
+  }
+  return syncToBaseN(value);
+}
+function syncDecode(code, totalChunks) {
+  const M = syncMaxSlotsFor(totalChunks);
+  let value = syncFromBaseN(code.trim());
+  if (value === null) return null;
+  const idx = new Array(M);
+  for (let i = M - 1; i >= 0; i--) {
+    idx[i] = value % totalChunks;
+    value = Math.floor(value / totalChunks);
+  }
+  const count = value % (M + 1);
+  value = Math.floor(value / (M + 1));
+  const isComplete = value % 2;
+  value = Math.floor(value / 2);
+  const mode = value % 2;
+  return { mode, isComplete, count, indices: idx.slice(0, count) };
 }
 
-function decodeSyncCode(b64, total) {
-  const result = new Set();
-  let pad = b64.length % 4;
-  if (pad) b64 += '='.repeat(4 - pad);
-  try {
-    const bin = atob(b64);
-    for (let i = 0; i < total; i++) {
-      let byteIdx = Math.floor(i / 8);
-      if (byteIdx < bin.length) {
-        if (bin.charCodeAt(byteIdx) & (1 << (i % 8))) result.add(i);
-      }
+// Builds the code the JOIN side shows: picks whichever set (received vs
+// missing) is smaller, sends it whole if it fits, else a rotating window.
+function generateSyncCode(total, chunksMap, rotationState) {
+  if (!total) return "";
+  const receivedCount = chunksMap.size;
+  const missingCount = total - receivedCount;
+  const useMissing = missingCount <= receivedCount;
+  const fullList = [];
+  if (useMissing) { for (let i = 0; i < total; i++) if (!chunksMap.has(i)) fullList.push(i); }
+  else { for (let i = 0; i < total; i++) if (chunksMap.has(i)) fullList.push(i); }
+
+  const M = syncMaxSlotsFor(total);
+  let chosen, isComplete;
+  if (fullList.length <= M) {
+    chosen = fullList;
+    isComplete = 1;
+  } else {
+    isComplete = 0;
+    chosen = [];
+    if (M > 0) {
+      for (let k = 0; k < M; k++) chosen.push(fullList[(rotationState.offset + k) % fullList.length]);
+      rotationState.offset = (rotationState.offset + M) % fullList.length;
     }
-  } catch (e) { alert("Invalid Sync Key"); }
-  return result;
+  }
+  return syncEncode(total, useMissing ? 1 : 0, isComplete, chosen);
+}
+
+// Applies a code the HOST side received: merges new info into excludedIndices
+// (chunks confirmed as no longer needing to be sent). Never removes prior
+// knowledge, since "received" is monotonic and never reverses.
+function applySyncCode(code, total, excludedIndices) {
+  const decoded = syncDecode(code, total);
+  if (!decoded) return { ok: false, updated: 0 };
+  let updated = 0;
+  if (decoded.mode === 0) {
+    decoded.indices.forEach(i => { if (!excludedIndices.has(i)) { excludedIndices.add(i); updated++; } });
+  } else if (decoded.isComplete) {
+    const missingSet = new Set(decoded.indices);
+    for (let i = 0; i < total; i++) {
+      if (!missingSet.has(i) && !excludedIndices.has(i)) { excludedIndices.add(i); updated++; }
+    }
+  }
+  return { ok: true, updated, allDone: decoded.mode === 1 && decoded.isComplete && decoded.indices.length === 0 };
 }
 
 const HostApp = {
@@ -274,11 +365,17 @@ const HostApp = {
     
     document.getElementById('applySyncBtn').onclick = () => {
       const code = document.getElementById('syncInput').value.trim();
-      if(code) {
-        this.excludedIndices = decodeSyncCode(code, this.gTotalChunks);
-        this.refreshGridVisuals();
-        this.refreshPass();
-      }
+      const statusEl = document.getElementById('s-statusMsg');
+      if (!code) return;
+      if (!this.gTotalChunks) { statusEl.textContent = 'Pehle payload select karo.'; return; }
+      const result = applySyncCode(code, this.gTotalChunks, this.excludedIndices);
+      if (!result.ok) { statusEl.textContent = '⚠️ Invalid Sync Key.'; return; }
+      this.refreshGridVisuals();
+      this.refreshPass();
+      statusEl.textContent = result.allDone
+        ? '✅ Node ke paas sab chunks already hain!'
+        : (result.updated > 0 ? `✅ ${result.updated} chunks synced.` : 'Synced — no new chunks in this key.');
+      document.getElementById('syncInput').value = '';
     };
 
     this.setupDragSelect();
@@ -410,10 +507,28 @@ HostApp.init();
 
 const JoinApp = {
   meta: null, chunks: new Map(), scanning: false, rafId: null, detector: null, video: null,
+  syncRotation: { offset: 0 },
+
+  refreshSyncCode() {
+    if (!this.meta) return;
+    document.getElementById('syncOutput').value = generateSyncCode(this.meta.total, this.chunks, this.syncRotation);
+  },
+  showInitialSyncCode() {
+    this.syncRotation.offset = 0;
+    this.refreshSyncCode();
+  },
+  generateNextSyncCode() {
+    if (!this.meta) return;
+    this.refreshSyncCode(); // generateSyncCode() advances the rotation window internally
+    const btn = document.getElementById('genSyncBtn');
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = '🔄'; }, 400);
+  },
   
   init() {
     this.video = document.getElementById('video');
     document.getElementById('startCamBtn').onclick = () => this.startCam();
+    document.getElementById('genSyncBtn').onclick = () => this.generateNextSyncCode();
     document.getElementById('copySyncBtn').onclick = () => {
       const out = document.getElementById('syncOutput');
       out.select(); document.execCommand('copy');
@@ -456,6 +571,7 @@ const JoinApp = {
         document.getElementById('joinPanel').classList.remove('hidden');
         document.getElementById('r-itemName').textContent = this.meta.name;
         this.renderGridHTML();
+        this.showInitialSyncCode();
       }
     } else if (parts[0] === 'D') {
       const [, id, idxStr, , chunkData] = parts;
@@ -477,7 +593,7 @@ const JoinApp = {
     document.getElementById('percentDisplay').textContent = `${Math.round(pct)}%`;
     document.getElementById('r-progressFill').style.width = `${pct}%`;
     
-    document.getElementById('syncOutput').value = generateSyncCode(this.meta.total, this.chunks);
+    this.refreshSyncCode();
     
     let receivedChars = 0; this.chunks.forEach(c => receivedChars += c.length);
     document.getElementById('r-dataReceived').textContent = `${formatBytes(receivedChars * 0.75)} / ${formatBytes(this.meta.size)}`;
