@@ -1,375 +1,225 @@
 <!DOCTYPE html>
-<html lang="hi">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QR File Receiver</title>
+<title>QR Node</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.2/qrcode.min.js"></script>
 <style>
   :root {
-    --bg: #0d1117;
-    --panel: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #3fb950;
-    --accent-dim: #238636;
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #3fb950; --accent-dim: #238636;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 24px 16px 60px;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 24px 16px 60px;
   }
-  h1 { font-size: 1.3rem; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; text-align: center; }
-  .start-btn {
-    padding: 14px 28px;
-    background: var(--accent-dim);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 24px; text-align: center; }
+  
+  .app-container { display: flex; flex-direction: column; width: 100%; max-width: 420px; gap: 16px; align-items: center; }
+  body.pc-mode .app-container { flex-direction: row; max-width: 1000px; align-items: flex-start; justify-content: center; }
+  body.pc-mode .panel-col { width: 420px; flex-shrink: 0; }
+  body.pc-mode .qr-col { flex-grow: 1; max-width: 500px; width: 100%; }
+  
+  .top-bar { display: flex; justify-content: space-between; width: 100%; max-width: 420px; margin-bottom: 20px; }
+  body.pc-mode .top-bar { max-width: 1000px; }
+  
+  button.action-btn {
+    padding: 12px 20px; background: var(--accent-dim); color: white; border: none;
+    border-radius: 8px; font-weight: 600; cursor: pointer; text-align: center; font-size: 0.9rem;
   }
-  #video-wrap {
-    display: none;
-    position: relative;
-    width: 100%;
-    max-width: 420px;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-  video { width: 100%; display: block; }
-  canvas { display: none; }
-  .scan-frame {
-    position: absolute;
-    top: 15%; left: 15%; right: 15%; bottom: 15%;
-    border: 2px solid var(--accent);
-    border-radius: 8px;
-    pointer-events: none;
-  }
+  button.action-btn:active { background: var(--accent); }
+  button.secondary-btn { background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+  
   .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 18px;
-    width: 100%;
-    max-width: 420px;
-    margin-top: 16px;
-    display: none;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px; width: 100%; margin-bottom: 16px;
   }
-  .row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.85rem;
-    color: var(--muted);
-    margin-bottom: 8px;
-  }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; font-size: 0.85rem; color: var(--muted); }
   .row span.val { color: var(--text); font-weight: 600; }
-  .percent-display {
-    text-align: center;
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: var(--accent);
-    margin: 4px 0 10px;
-    font-variant-numeric: tabular-nums;
+  
+  #qr-stage, #video-wrap {
+    background: white; border-radius: 12px; padding: 16px; display: none;
+    flex-direction: column; align-items: center; width: 100%; position: relative;
   }
-  .progress-bar {
-    width: 100%; height: 8px;
-    background: #30363d;
-    border-radius: 4px;
-    overflow: hidden;
-    margin-top: 6px;
-  }
-  .progress-fill {
-    height: 100%;
-    background: var(--accent-dim);
-    width: 0%;
-    transition: width 0.15s linear;
-  }
-  .missing {
-    font-size: 0.75rem;
-    color: var(--muted);
-    margin-top: 10px;
-    word-break: break-all;
-  }
+  #video-wrap { padding: 0; overflow: hidden; background: #000; border: 1px solid var(--border); }
+  #qr-canvas-wrap { display: grid; gap: 6px; width: 100%; }
+  #qr-canvas-wrap img { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+  video { width: 100%; display: block; }
+  .scan-frame { position: absolute; top: 15%; left: 15%; right: 15%; bottom: 15%; border: 2px solid var(--accent); border-radius: 8px; pointer-events: none; }
+  
+  .progress-bar { width: 100%; height: 6px; background: #e5e5e5; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+  #video-wrap .progress-bar { background: #30363d; margin: 10px; width: calc(100% - 20px); }
+  .progress-fill { height: 100%; background: var(--accent-dim); width: 0%; transition: width 0.1s linear; }
+  .percent-display { text-align: center; font-size: 2.2rem; font-weight: 700; color: var(--accent); margin: 4px 0 10px; }
+  
   .chunk-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    max-height: 260px;
-    overflow-y: auto;
-    padding: 8px;
-    background: #0d1117;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    display: flex; flex-wrap: wrap; gap: 4px; max-height: 260px; overflow-y: auto; padding: 8px;
+    background: #0d1117; border: 1px solid var(--border); border-radius: 8px; user-select: none;
   }
   .chunk-btn {
-    width: 34px;
-    height: 28px;
-    font-size: 0.62rem;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: #21262d;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
+    width: 34px; height: 28px; font-size: 0.62rem; border-radius: 4px; border: 1px solid var(--border);
+    background: #21262d; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center;
   }
-  .chunk-btn.received {
-    background: var(--accent-dim);
-    color: white;
-    border-color: var(--accent);
-  }
-  .download-btn {
-    display: none;
-    margin-top: 16px;
-    padding: 14px 28px;
-    background: var(--accent);
-    color: #0d1117;
-    text-decoration: none;
-    border-radius: 8px;
-    font-weight: 700;
-    font-size: 0.95rem;
-  }
-  .status { font-size: 0.8rem; color: var(--muted); text-align: center; margin-top: 12px; max-width: 420px; }
+  .chunk-btn.received { background: var(--accent-dim); color: white; border-color: var(--accent); }
+  
+  .sync-box { display: flex; gap: 8px; margin-top: 8px; }
+  .sync-input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: #0d1117; color: var(--text); font-family: monospace; }
+  
+  .status { font-size: 0.8rem; color: var(--muted); text-align: center; margin-top: 10px; }
+  .hidden { display: none !important; }
 </style>
 </head>
-<body>
+<body class="mobile-mode">
 
-<h1>QR File Receiver</h1>
-<div class="sub">Camera se sender phone ke animated QR codes scan karo.<br>File apne aap reassemble ho jayegi.</div>
-
-<button class="start-btn" id="startBtn">📷 Camera Open Karo</button>
-
-<div id="video-wrap">
-  <video id="video" playsinline autoplay muted></video>
-  <div class="scan-frame"></div>
+<div class="top-bar">
+  <button class="action-btn secondary-btn" id="homeBtn">⬅ Back</button>
+  <div style="display:flex; gap:8px;">
+    <button class="action-btn secondary-btn" id="dlSourceBtn" title="Download Code as TXT">💾 .TXT</button>
+    <button class="action-btn secondary-btn" id="viewToggleBtn">💻 PC View</button>
+  </div>
 </div>
 
-<div class="panel" id="infoPanel">
-  <div class="row"><span>File</span><span class="val" id="fName">—</span></div>
-  <div class="percent-display" id="percentDisplay">0%</div>
-  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-  <div class="row" style="margin-top:12px"><span>Chunks received</span><span class="val" id="chunkStatus">0 / 0</span></div>
-  <div class="row"><span>Data received</span><span class="val" id="dataReceived">0 KB / 0 KB</span></div>
-
-  <div class="row" style="margin-top:14px"><span>Received chunks (sender pe wahi number green karo)</span></div>
-  <div id="chunkGrid" class="chunk-grid" style="margin-top:8px;"></div>
+<div id="mainMenu" style="display:flex; flex-direction:column; gap:20px; align-items:center; margin-top: 50px;">
+  <h1>QR Node</h1>
+  <div class="sub">Offline synchronization portal</div>
+  <button class="action-btn" style="width: 250px; padding: 20px; font-size: 1.1rem;" onclick="startApp('host')">📤 Host Payload</button>
+  <button class="action-btn" style="width: 250px; padding: 20px; font-size: 1.1rem;" onclick="startApp('join')">📥 Join Payload</button>
 </div>
 
-<a id="downloadBtn" class="download-btn" download>⬇ File Download Karo</a>
+<div id="hostUI" class="app-container hidden">
+  <div class="panel-col">
+    <div class="panel">
+      <button class="action-btn" id="browseBtn" style="width:100%">📁 Select Payload</button>
+      <input type="file" id="dataInput" class="hidden">
+      
+      <div id="hostMeta" class="hidden">
+        <div class="row"><span>Name</span><span class="val" id="s-itemName">—</span></div>
+        <div class="row"><span>Size</span><span class="val" id="s-itemSize">—</span></div>
+        <div class="row"><span>Total Frames</span><span class="val" id="s-chunkCount">—</span></div>
+        
+        <div class="row" style="margin-top:16px;"><span>Speed</span>
+          <input type="range" id="speedSlider" min="2" max="15" value="4" style="flex:1; margin:0 10px;">
+          <span class="val" id="speedVal">4 fps</span>
+        </div>
+        <div class="row" style="margin-top:10px;"><span>Grid Size</span>
+          <select id="gridSelect" style="background:#0d1117; color:var(--text); border:1px solid var(--border); border-radius:6px; padding:4px;">
+            <option value="1">1 (Max Reliability)</option>
+            <option value="4" selected>4 (2×2)</option>
+            <option value="6">6 (2×3)</option>
+            <option value="9">9 (3×3)</option>
+          </select>
+        </div>
+      </div>
+    </div>
 
-<div class="status" id="statusMsg"></div>
+    <div class="panel hidden" id="hostControlPanel">
+      <div style="display:flex; gap:8px; margin-bottom: 12px;">
+        <button class="action-btn secondary-btn" id="pauseBtn" style="flex:1">⏸ Pause</button>
+        <button class="action-btn secondary-btn" id="restartBtn" style="flex:1">⟲ Restart</button>
+      </div>
+      
+      <div class="row"><span>Select completed chunks (Click & Drag)</span></div>
+      <div id="host-chunkGrid" class="chunk-grid"></div>
+      
+      <div class="row" style="margin-top:16px;"><span>Auto-Sync from Node</span></div>
+      <div class="sync-box">
+        <input type="text" id="syncInput" class="sync-input" placeholder="Paste Sync Key here...">
+        <button class="action-btn" id="applySyncBtn">Apply</button>
+      </div>
+      
+      <div class="status" id="s-statusMsg"></div>
+    </div>
+  </div>
+
+  <div class="qr-col">
+    <div id="qr-stage">
+      <div id="qr-canvas-wrap"></div>
+      <div style="color:#111; font-size:0.8rem; margin-top:10px; font-weight:600;" id="frameLabel">—</div>
+      <div class="progress-bar"><div class="progress-fill" id="s-progressFill"></div></div>
+    </div>
+  </div>
+</div>
+
+<div id="joinUI" class="app-container hidden">
+  <div class="panel-col">
+    <button class="action-btn" id="startCamBtn" style="width:100%; margin-bottom:16px;">📷 Open Camera</button>
+    
+    <div id="video-wrap">
+      <video id="video" playsinline autoplay muted></video>
+      <div class="scan-frame"></div>
+    </div>
+
+    <div class="panel hidden" id="joinPanel">
+      <div class="percent-display" id="percentDisplay">0%</div>
+      <div class="progress-bar" style="background:#30363d; margin-top:0;"><div class="progress-fill" id="r-progressFill"></div></div>
+      
+      <div class="row" style="margin-top:12px"><span>Name</span><span class="val" id="r-itemName">—</span></div>
+      <div class="row"><span>Chunks Synchronized</span><span class="val" id="r-chunkStatus">0 / 0</span></div>
+      <div class="row"><span>Data Synchronized</span><span class="val" id="r-dataReceived">0 KB</span></div>
+      
+      <div class="row" style="margin-top:16px;"><span>Offline Sync Key (Give to Host)</span></div>
+      <div class="sync-box">
+        <input type="text" id="syncOutput" class="sync-input" readonly>
+        <button class="action-btn" id="copySyncBtn">Copy</button>
+      </div>
+
+      <div class="row" style="margin-top:16px;"><span>Chunk Map</span></div>
+      <div id="join-chunkGrid" class="chunk-grid" style="max-height: 150px;"></div>
+      
+      <a id="saveBtn" class="action-btn hidden" style="width:100%; margin-top:16px; text-decoration:none;" download>⬇ Save Output</a>
+      <div class="status" id="r-statusMsg">Waiting for frames...</div>
+    </div>
+  </div>
+</div>
 
 <script>
-const startBtn = document.getElementById('startBtn');
-const videoWrap = document.getElementById('video-wrap');
-const video = document.getElementById('video');
-const infoPanel = document.getElementById('infoPanel');
-const chunkGrid = document.getElementById('chunkGrid');
-const fName = document.getElementById('fName');
-const chunkStatus = document.getElementById('chunkStatus');
-const percentDisplay = document.getElementById('percentDisplay');
-const dataReceived = document.getElementById('dataReceived');
-const progressFill = document.getElementById('progressFill');
-const downloadBtn = document.getElementById('downloadBtn');
-const statusMsg = document.getElementById('statusMsg');
+const body = document.body;
+const viewToggleBtn = document.getElementById('viewToggleBtn');
+const homeBtn = document.getElementById('homeBtn');
+const dlSourceBtn = document.getElementById('dlSourceBtn');
+const mainMenu = document.getElementById('mainMenu');
+const hostUI = document.getElementById('hostUI');
+const joinUI = document.getElementById('joinUI');
 
-let meta = null; // {id, totalChunks, name, mime}
-let chunks = new Map(); // index -> base64 string
-let pendingCombos = []; // repair frames waiting for one side to become known
-let scanning = false;
-let rafId = null;
-let detector = null;
-
-function padBytes(str, len) {
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < str.length; i++) arr[i] = str.charCodeAt(i);
-  return arr;
-}
-function xorBytesArr(a, b) {
-  const out = new Uint8Array(a.length);
-  for (let i = 0; i < a.length; i++) out[i] = a[i] ^ b[i];
-  return out;
-}
-function bytesToStr(bytes) {
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return s;
-}
-function base64ToBytes(b64) {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
-}
-
-function storeChunk(idx, str) {
-  if (chunks.has(idx)) return;
-  chunks.set(idx, str);
-  markChunkGreen(idx);
-  updateProgress();
-  sweepPending();
-}
-
-// try to resolve a repair (XOR) frame: if we already know one of the two
-// chunks it combines, algebraically recover the other one instantly —
-// no need to wait for that exact original frame to loop back around.
-function tryResolveCombo(c) {
-  const haveA = chunks.has(c.idxA);
-  const haveB = chunks.has(c.idxB);
-  if (haveA && haveB) return true; // nothing left to learn from this one
-  if (!haveA && !haveB) return false; // keep waiting
-  const knownIdx = haveA ? c.idxA : c.idxB;
-  const unknownIdx = haveA ? c.idxB : c.idxA;
-  const unknownLen = haveA ? c.lenB : c.lenA;
-  const knownPadded = padBytes(chunks.get(knownIdx), c.padLen);
-  const recoveredPadded = xorBytesArr(c.xorBytes, knownPadded);
-  const recoveredStr = bytesToStr(recoveredPadded.slice(0, unknownLen));
-  storeChunk(unknownIdx, recoveredStr);
-  return true;
-}
-
-function sweepPending() {
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (let i = pendingCombos.length - 1; i >= 0; i--) {
-      if (tryResolveCombo(pendingCombos[i])) {
-        pendingCombos.splice(i, 1);
-        changed = true;
-      }
-    }
-  }
-}
-
-startBtn.onclick = async () => {
-  if (!('BarcodeDetector' in window)) {
-    statusMsg.textContent = '⚠️ Ye browser QR scanning support nahi karta. Android par latest Chrome / Edge use karo.';
-    return;
-  }
-  try {
-    detector = new BarcodeDetector({ formats: ['qr_code'] });
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' }
-    });
-    video.srcObject = stream;
-    videoWrap.style.display = 'block';
-    startBtn.style.display = 'none';
-    scanning = true;
-    statusMsg.textContent = 'QR code ko frame ke andar rakho...';
-    video.onloadedmetadata = () => {
-      tick();
-    };
-  } catch (err) {
-    statusMsg.textContent = 'Camera access nahi mil paya: ' + err.message;
+viewToggleBtn.onclick = () => {
+  if (body.classList.contains('mobile-mode')) {
+    body.classList.replace('mobile-mode', 'pc-mode');
+    viewToggleBtn.textContent = '📱 Mobile View';
+  } else {
+    body.classList.replace('pc-mode', 'mobile-mode');
+    viewToggleBtn.textContent = '💻 PC View';
   }
 };
 
-async function tick() {
-  if (!scanning) return;
-  if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    try {
-      const codes = await detector.detect(video);
-      for (const code of codes) {
-        if (code && code.rawValue) handleFrame(code.rawValue);
-      }
-    } catch (e) {
-      // detection hiccup on a frame — ignore and keep scanning
-    }
+homeBtn.onclick = () => {
+  hostUI.classList.add('hidden');
+  joinUI.classList.add('hidden');
+  mainMenu.classList.remove('hidden');
+  if(JoinApp.scanning || HostApp.timer) window.location.reload(); 
+};
+
+dlSourceBtn.onclick = () => {
+  const htmlContent = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
+  const blob = new Blob([htmlContent], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "qr-node.txt";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+function startApp(mode) {
+  mainMenu.classList.add('hidden');
+  if (mode === 'host') {
+    hostUI.classList.remove('hidden');
+  } else {
+    joinUI.classList.remove('hidden');
   }
-  rafId = requestAnimationFrame(tick);
-}
-
-function handleFrame(data) {
-  const parts = data.split('|');
-  if (parts[0] === 'M') {
-    const [, id, totalChunks, name, mime, size] = parts;
-    if (!meta || meta.id !== id) {
-      meta = { id, totalChunks: parseInt(totalChunks, 10), name: decodeURIComponent(name), mime, size: size ? parseInt(size, 10) : null };
-      chunks = new Map();
-      pendingCombos = [];
-      infoPanel.style.display = 'block';
-      fName.textContent = meta.name;
-      renderChunkGrid();
-      updateProgress();
-    } else if (meta.size == null && size) {
-      meta.size = parseInt(size, 10);
-    }
-  } else if (parts[0] === 'D') {
-    const [, id, idxStr, totalStr, chunkData] = parts;
-    if (!meta) {
-      // data frame arrived before meta frame — create provisional meta
-      meta = { id, totalChunks: parseInt(totalStr, 10), name: 'received_file', mime: 'application/octet-stream' };
-      infoPanel.style.display = 'block';
-      fName.textContent = meta.name;
-      renderChunkGrid();
-    }
-    if (meta.id !== id) return; // frame from a different transfer, ignore
-    storeChunk(parseInt(idxStr, 10), chunkData);
-  } else if (parts[0] === 'X') {
-    const [, id, totalStr, idxAStr, idxBStr, lenAStr, lenBStr, padLenStr, b64xor] = parts;
-    if (!meta) {
-      meta = { id, totalChunks: parseInt(totalStr, 10), name: 'received_file', mime: 'application/octet-stream' };
-      infoPanel.style.display = 'block';
-      fName.textContent = meta.name;
-      renderChunkGrid();
-    }
-    if (meta.id !== id) return;
-    const combo = {
-      idxA: parseInt(idxAStr, 10), idxB: parseInt(idxBStr, 10),
-      lenA: parseInt(lenAStr, 10), lenB: parseInt(lenBStr, 10),
-      padLen: parseInt(padLenStr, 10), xorBytes: base64ToBytes(b64xor)
-    };
-    if (!tryResolveCombo(combo)) {
-      pendingCombos.push(combo);
-      if (pendingCombos.length > 80) pendingCombos.shift();
-    }
-  }
-
-  if (meta && chunks.size === meta.totalChunks) {
-    finishTransfer();
-  }
-}
-
-function updateProgress() {
-  if (!meta) return;
-  const pct = meta.totalChunks ? (chunks.size / meta.totalChunks) * 100 : 0;
-  chunkStatus.textContent = `${chunks.size} / ${meta.totalChunks}`;
-  percentDisplay.textContent = `${Math.round(pct)}%`;
-  progressFill.style.width = `${pct}%`;
-
-  // received data size: sum of base64 chars actually collected, converted to approx raw bytes
-  let receivedBase64Chars = 0;
-  chunks.forEach(c => receivedBase64Chars += c.length);
-  const receivedBytes = Math.floor(receivedBase64Chars * 3 / 4);
-  const totalLabel = meta.size != null ? formatBytes(meta.size) : '—';
-  dataReceived.textContent = `${formatBytes(receivedBytes)} / ${totalLabel}`;
-}
-
-function renderChunkGrid() {
-  if (!meta) return;
-  let html = '';
-  for (let i = 0; i < meta.totalChunks; i++) {
-    html += `<button class="chunk-btn" data-idx="${i}">${i}</button>`;
-  }
-  chunkGrid.innerHTML = html;
-}
-
-function markChunkGreen(idx) {
-  const btn = chunkGrid.querySelector(`[data-idx="${idx}"]`);
-  if (btn) btn.classList.add('received');
 }
 
 function formatBytes(bytes) {
@@ -378,34 +228,289 @@ function formatBytes(bytes) {
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 }
 
-function finishTransfer() {
-  scanning = false;
-  if (rafId) cancelAnimationFrame(rafId);
-  const stream = video.srcObject;
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  videoWrap.style.display = 'none';
-
-  let base64 = '';
-  for (let i = 0; i < meta.totalChunks; i++) {
-    base64 += chunks.get(i) || '';
+function generateSyncCode(total, chunksMap) {
+  if (!total) return "";
+  const bytes = new Uint8Array(Math.ceil(total / 8));
+  for (let i = 0; i < total; i++) {
+    if (chunksMap.has(i)) bytes[Math.floor(i / 8)] |= (1 << (i % 8));
   }
-
-  try {
-    const byteChars = atob(base64);
-    const byteNumbers = new Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: meta.mime });
-    const url = URL.createObjectURL(blob);
-    downloadBtn.href = url;
-    downloadBtn.download = meta.name;
-    downloadBtn.style.display = 'inline-block';
-    statusMsg.textContent = '✅ File poori tarah receive ho gayi!';
-  } catch (e) {
-    statusMsg.textContent = 'Reassemble karte waqt error aayi: ' + e.message;
-  }
+  let len = bytes.length;
+  while (len > 0 && bytes[len - 1] === 0) len--;
+  if (len === 0) return "";
+  let b64 = btoa(String.fromCharCode.apply(null, bytes.slice(0, len)));
+  return b64.replace(/=/g, '');
 }
-</script>
 
+function decodeSyncCode(b64, total) {
+  const result = new Set();
+  let pad = b64.length % 4;
+  if (pad) b64 += '='.repeat(4 - pad);
+  try {
+    const bin = atob(b64);
+    for (let i = 0; i < total; i++) {
+      let byteIdx = Math.floor(i / 8);
+      if (byteIdx < bin.length) {
+        if (bin.charCodeAt(byteIdx) & (1 << (i % 8))) result.add(i);
+      }
+    }
+  } catch (e) { alert("Invalid Sync Key"); }
+  return result;
+}
+
+const HostApp = {
+  CHUNK_SIZE: 700, gId: '', gTotalChunks: 0, gMetaStr: '', gChunkStrs: [],
+  excludedIndices: new Set(), currentPass: [], currentIdx: 0, timer: null, paused: false,
+  
+  init() {
+    document.getElementById('browseBtn').onclick = () => document.getElementById('dataInput').click();
+    document.getElementById('dataInput').onchange = (e) => this.processSelection(e);
+    document.getElementById('speedSlider').oninput = (e) => {
+      document.getElementById('speedVal').textContent = `${e.target.value} fps`;
+      if (this.currentPass.length) this.startLoop();
+    };
+    document.getElementById('gridSelect').onchange = () => { this.currentIdx = 0; if (this.currentPass.length) this.startLoop(); };
+    document.getElementById('pauseBtn').onclick = () => this.togglePause();
+    document.getElementById('restartBtn').onclick = () => { this.currentIdx = 0; this.paused = false; document.getElementById('pauseBtn').textContent = '⏸ Pause'; };
+    
+    document.getElementById('applySyncBtn').onclick = () => {
+      const code = document.getElementById('syncInput').value.trim();
+      if(code) {
+        this.excludedIndices = decodeSyncCode(code, this.gTotalChunks);
+        this.refreshGridVisuals();
+        this.refreshPass();
+      }
+    };
+
+    this.setupDragSelect();
+  },
+
+  processSelection(e) {
+    const item = e.target.files[0];
+    if (!item) return;
+    const reader = new FileReader();
+    reader.onload = () => this.buildData(item, reader.result.split(',')[1]);
+    reader.readAsDataURL(item);
+  },
+
+  buildData(item, base64) {
+    this.gId = Math.random().toString(36).slice(2, 8);
+    this.gTotalChunks = Math.ceil(base64.length / this.CHUNK_SIZE);
+    this.gChunkStrs = [];
+    for (let i = 0; i < this.gTotalChunks; i++) this.gChunkStrs.push(base64.slice(i * this.CHUNK_SIZE, (i + 1) * this.CHUNK_SIZE));
+    this.gMetaStr = `M|${this.gId}|${this.gTotalChunks}|${encodeURIComponent(item.name)}|${item.type || 'application/octet-stream'}|${item.size}`;
+    
+    this.excludedIndices.clear();
+    this.renderGridHTML();
+    
+    document.getElementById('hostMeta').classList.remove('hidden');
+    document.getElementById('hostControlPanel').classList.remove('hidden');
+    document.getElementById('qr-stage').style.display = 'flex';
+    
+    document.getElementById('s-itemName').textContent = item.name;
+    document.getElementById('s-itemSize').textContent = formatBytes(item.size);
+    document.getElementById('s-chunkCount').textContent = this.gTotalChunks;
+    
+    this.refreshPass();
+    this.startLoop();
+  },
+
+  buildPassFrames() {
+    const pool = [...Array(this.gTotalChunks).keys()].filter(i => !this.excludedIndices.has(i));
+    const order = pool.sort(() => Math.random() - 0.5);
+    const pass = [this.gMetaStr];
+    order.forEach((idx, n) => {
+      pass.push(`D|${this.gId}|${idx}|${this.gTotalChunks}|${this.gChunkStrs[idx]}`);
+      if ((n + 1) % 8 === 0) pass.push(this.gMetaStr);
+    });
+    if (pass.length === 1) pass.push(this.gMetaStr);
+    return pass;
+  },
+
+  startLoop() {
+    clearInterval(this.timer);
+    const fps = parseInt(document.getElementById('speedSlider').value, 10);
+    const gridSize = parseInt(document.getElementById('gridSelect').value, 10);
+    this.timer = setInterval(() => {
+      if (this.paused) return;
+      if (this.currentIdx >= this.currentPass.length) { this.currentPass = this.buildPassFrames(); this.currentIdx = 0; }
+      const batch = this.currentPass.slice(this.currentIdx, this.currentIdx + gridSize);
+      this.renderQR(batch);
+      this.currentIdx += batch.length;
+    }, 1000 / fps);
+  },
+
+  renderQR(dataArr) {
+    let html = '';
+    dataArr.forEach(data => {
+      const qr = qrcode(0, 'M'); qr.addData(data); qr.make(); html += qr.createImgTag(3, 4);
+    });
+    const wrap = document.getElementById('qr-canvas-wrap');
+    wrap.innerHTML = html;
+    wrap.style.gridTemplateColumns = `repeat(${Math.ceil(Math.sqrt(dataArr.length))}, 1fr)`;
+    
+    const pct = ((this.currentIdx + dataArr.length) / this.currentPass.length) * 100;
+    document.getElementById('s-progressFill').style.width = `${pct}%`;
+    document.getElementById('frameLabel').textContent = `Showing ${dataArr.length} codes — Loop ${this.currentIdx + dataArr.length} / ${this.currentPass.length}`;
+  },
+
+  refreshPass() {
+    this.currentPass = this.buildPassFrames();
+    this.currentIdx = 0;
+    if (this.excludedIndices.size >= this.gTotalChunks) {
+      this.paused = true; document.getElementById('s-statusMsg').textContent = '✅ All chunks sent!';
+    } else {
+      this.paused = false; document.getElementById('s-statusMsg').textContent = `${this.gTotalChunks - this.excludedIndices.size} chunks remaining...`;
+    }
+  },
+
+  togglePause() {
+    this.paused = !this.paused;
+    document.getElementById('pauseBtn').textContent = this.paused ? '▶ Resume' : '⏸ Pause';
+  },
+
+  setupDragSelect() {
+    const grid = document.getElementById('host-chunkGrid');
+    let isDragging = false, setMode = false;
+    
+    grid.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('chunk-btn')) {
+        isDragging = true;
+        const idx = parseInt(e.target.dataset.idx, 10);
+        setMode = !this.excludedIndices.has(idx);
+        this.toggleChunk(idx, setMode, e.target);
+      }
+    });
+    grid.addEventListener('mouseover', (e) => {
+      if (isDragging && e.target.classList.contains('chunk-btn')) {
+        this.toggleChunk(parseInt(e.target.dataset.idx, 10), setMode, e.target);
+      }
+    });
+    window.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; this.refreshPass(); }});
+  },
+  
+  toggleChunk(idx, mode, btn) {
+    if (mode) { this.excludedIndices.add(idx); btn.classList.add('received'); }
+    else { this.excludedIndices.delete(idx); btn.classList.remove('received'); }
+  },
+
+  renderGridHTML() {
+    let html = '';
+    for (let i = 0; i < this.gTotalChunks; i++) html += `<button class="chunk-btn" data-idx="${i}">${i}</button>`;
+    document.getElementById('host-chunkGrid').innerHTML = html;
+  },
+  
+  refreshGridVisuals() {
+    document.querySelectorAll('#host-chunkGrid .chunk-btn').forEach(btn => {
+      if (this.excludedIndices.has(parseInt(btn.dataset.idx, 10))) btn.classList.add('received');
+      else btn.classList.remove('received');
+    });
+  }
+};
+HostApp.init();
+
+const JoinApp = {
+  meta: null, chunks: new Map(), scanning: false, rafId: null, detector: null, video: null,
+  
+  init() {
+    this.video = document.getElementById('video');
+    document.getElementById('startCamBtn').onclick = () => this.startCam();
+    document.getElementById('copySyncBtn').onclick = () => {
+      const out = document.getElementById('syncOutput');
+      out.select(); document.execCommand('copy');
+      document.getElementById('copySyncBtn').textContent = "Copied!";
+      setTimeout(() => document.getElementById('copySyncBtn').textContent = "Copy", 2000);
+    };
+  },
+
+  async startCam() {
+    if (!('BarcodeDetector' in window)) return alert('Browser does not support native QR scanning.');
+    try {
+      this.detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      this.video.srcObject = stream;
+      document.getElementById('video-wrap').style.display = 'block';
+      document.getElementById('startCamBtn').classList.add('hidden');
+      this.scanning = true;
+      this.video.onloadedmetadata = () => this.tick();
+    } catch (err) { alert('Camera error: ' + err.message); }
+  },
+
+  async tick() {
+    if (!this.scanning) return;
+    if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
+      try {
+        const codes = await this.detector.detect(this.video);
+        for (const code of codes) if (code && code.rawValue) this.handleFrame(code.rawValue);
+      } catch (e) {}
+    }
+    this.rafId = requestAnimationFrame(() => this.tick());
+  },
+
+  handleFrame(data) {
+    const parts = data.split('|');
+    if (parts[0] === 'M') {
+      const [, id, tChunks, name, mime, size] = parts;
+      if (!this.meta || this.meta.id !== id) {
+        this.meta = { id, total: parseInt(tChunks, 10), name: decodeURIComponent(name), mime, size: parseInt(size, 10) };
+        this.chunks.clear();
+        document.getElementById('joinPanel').classList.remove('hidden');
+        document.getElementById('r-itemName').textContent = this.meta.name;
+        this.renderGridHTML();
+      }
+    } else if (parts[0] === 'D') {
+      const [, id, idxStr, , chunkData] = parts;
+      if (!this.meta || this.meta.id !== id) return;
+      const idx = parseInt(idxStr, 10);
+      if (!this.chunks.has(idx)) {
+        this.chunks.set(idx, chunkData);
+        const btn = document.querySelector(`#join-chunkGrid .chunk-btn[data-idx="${idx}"]`);
+        if (btn) btn.classList.add('received');
+        this.updateProgress();
+      }
+    }
+    if (this.meta && this.chunks.size === this.meta.total) this.finishTask();
+  },
+
+  updateProgress() {
+    const pct = (this.chunks.size / this.meta.total) * 100;
+    document.getElementById('r-chunkStatus').textContent = `${this.chunks.size} / ${this.meta.total}`;
+    document.getElementById('percentDisplay').textContent = `${Math.round(pct)}%`;
+    document.getElementById('r-progressFill').style.width = `${pct}%`;
+    
+    document.getElementById('syncOutput').value = generateSyncCode(this.meta.total, this.chunks);
+    
+    let receivedChars = 0; this.chunks.forEach(c => receivedChars += c.length);
+    document.getElementById('r-dataReceived').textContent = `${formatBytes(receivedChars * 0.75)} / ${formatBytes(this.meta.size)}`;
+  },
+
+  renderGridHTML() {
+    let html = '';
+    for (let i = 0; i < this.meta.total; i++) html += `<button class="chunk-btn" data-idx="${i}">${i}</button>`;
+    document.getElementById('join-chunkGrid').innerHTML = html;
+  },
+
+  finishTask() {
+    this.scanning = false;
+    cancelAnimationFrame(this.rafId);
+    this.video.srcObject.getTracks().forEach(t => t.stop());
+    document.getElementById('video-wrap').style.display = 'none';
+
+    let base64 = '';
+    for (let i = 0; i < this.meta.total; i++) base64 += this.chunks.get(i) || '';
+    try {
+      const bin = atob(base64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([arr], { type: this.meta.mime }));
+      const dBtn = document.getElementById('saveBtn');
+      dBtn.href = url; dBtn.download = this.meta.name;
+      dBtn.classList.remove('hidden');
+      document.getElementById('r-statusMsg').textContent = '✅ Output generated!';
+    } catch (e) { document.getElementById('r-statusMsg').textContent = 'Error: ' + e.message; }
+  }
+};
+JoinApp.init();
+
+</script>
 </body>
-  </html>
+</html>
