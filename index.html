@@ -604,9 +604,11 @@ const JoinApp = {
     document.getElementById('r-chunkStatus').textContent = `${this.chunks.size} / ${this.meta.total}`;
     document.getElementById('percentDisplay').textContent = `${Math.round(pct)}%`;
     document.getElementById('r-progressFill').style.width = `${pct}%`;
-    
-    this.refreshSyncCode();
-    
+
+    // NOTE: the sync code is intentionally NOT touched here. It only
+    // updates on showInitialSyncCode() (first frame) or an explicit
+    // generateNextSyncCode() click — never automatically as chunks arrive.
+
     let receivedChars = 0; this.chunks.forEach(c => receivedChars += c.length);
     document.getElementById('r-dataReceived').textContent = `${formatBytes(receivedChars * 0.75)} / ${formatBytes(this.meta.size)}`;
   },
